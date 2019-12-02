@@ -1,0 +1,2 @@
+I would rate my code readiness 2
+I have been able to link up all the cheque numbers with an order as well have to ability for the customer to add up new cheques that could be used for order payments

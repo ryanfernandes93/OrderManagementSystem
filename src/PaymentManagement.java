@@ -1,143 +1,176 @@
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.sql.*;
+import java.text.DecimalFormat;
 
 public class PaymentManagement 
 {
 	Connection database;
-	Statement statement;
-	void reconcilePayments( Connection database ) throws SQLException
+	Statement statement,statement1,statement2;
+	ResultSet resultSet,resultSet1;
+	//Connect orders to payments as part of database modification
+	void reconcilePayments( Connection database )
 	{
 		try {
 			this.database=database;			
 			statement = database.createStatement();
-			System.out.println("conn established");
+			statement1 = database.createStatement();
+			statement2 = database.createStatement();
+			String updateQuery="USE classicmodels";
+			statement.executeQuery(updateQuery);
 			//Upgrade the db schema
-			String updateQuery="update orders inner join orderdetails"+
-					" on orders.ordernumber=orderdetails.ordernumber"+
-					" set orders.totalAmount=(select sum(orderdetails.quantityOrdered*orderdetails.priceEach) from orderdetails"+
-					" where orders.ordernumber=orderdetails.ordernumber group by ordernumber);";
-			statement.executeUpdate(updateQuery);
+			statement.executeUpdate("UPDATE orders INNER JOIN orderdetails"+
+					" ON orders.ordernumber=orderdetails.ordernumber"+
+					" SET orders.totalAmount=(SELECT SUM(orderdetails.quantityOrdered*orderdetails.priceEach) FROM orderdetails"+
+					" WHERE orders.ordernumber=orderdetails.ordernumber GROUP BY ordernumber);");
 
-			updateQuery="update orders inner join payments"+
-					" on orders.customerNumber=payments.customerNumber"+
-					" set orders.checkNumber=(select checkNumber from payments where orders.totalAmount=payments.amount);";
-			statement.executeUpdate(updateQuery);
-		} catch (SQLException e) 
+
+			statement.executeUpdate("UPDATE orders INNER JOIN payments"+
+					" ON orders.customerNumber=payments.customerNumber"+
+					" SET orders.checkNumber=(SELECT checkNumber FROM payments WHERE orders.totalAmount=payments.amount);");
+			ArrayList<String> orders = new ArrayList<String>();
+			ArrayList<String> customers = new ArrayList<String>();
+			double sum = 0;
+			double amount1 = 0;
+			resultSet = statement.executeQuery("SELECT orderNumber, SUM(quantityOrdered*priceEach) AS sum, a.customerNumber AS customerNumber, a.shippedDate FROM orderdetails"+
+					" JOIN (SELECT * from orders)  AS a USING (orderNumber) WHERE status IN ('Shipped','Resolved') GROUP BY(orderNumber)"+
+					" ORDER BY customerNumber, orderDate");
+			while(resultSet.next())
+			{
+				if(!customers.contains(resultSet.getString("customerNumber"))) {
+					sum = 0;
+					orders.clear();
+				}
+				String customerNo = resultSet.getString("customerNumber");
+				String orderNumber = resultSet.getString("orderNumber");
+				String amount = resultSet.getString("sum");
+				String amountS = resultSet.getString("sum");
+				amount1 = Double.parseDouble(amount);
+				if(sum!=0) 
+				{
+					amount1= amount1+sum;
+					String a1=new DecimalFormat("#.##").format(amount1);
+					amount1=Double.parseDouble(a1);
+				}
+				resultSet1 = statement1.executeQuery("SELECT checkNumber FROM payments WHERE payments.customerNumber = '"+customerNo+"' AND payments.amount = '"+amount1+"'");
+				if(!customers.contains(customerNo))
+				{
+					customers.add(customerNo);
+				}
+				if(resultSet1.next())
+				{
+					String checkNo = resultSet1.getString("checkNumber");
+					if(orders.size()>0)
+					{
+						for(int i = 0;i<orders.size();i++)
+						{
+							statement2.executeUpdate("UPDATE orders SET checkNumber = '"+checkNo+"' WHERE orderNumber = '"+orders.get(i)+"'");
+						}
+						orders.clear();
+						sum=0;
+					}
+					statement2.executeUpdate("UPDATE orders SET checkNumber = '"+checkNo+"' WHERE orderNumber = '"+orderNumber+"'");
+				}
+				else
+				{
+					orders.add(resultSet.getString("orderNumber"));
+					sum += Double.parseDouble(amountS);	
+				}				
+			}
+			statement.close();
+		} catch (Exception e) 
 		{
-			// SQL Exception
-			System.out.println("SQL Exception");
 			e.printStackTrace();
 		}
-		statement.close();
-		//database.close();
 	}
 
+	//Records the receipt of a payment, with the given cheque number, that is supposed to cover all of the listed orders. Return true if the payments were
+	//recorded as proper payments and false if the payments aren’t recorded.
 	boolean payOrder( Connection database, float amount, String cheque_number,ArrayList<Integer> orders )
 	{
-		//establish the connection
-		try {
+		//get customer number from orders
+		try{
 			this.database=database;			
 			statement = database.createStatement();
-			System.out.println("conn established");
-			
-			//check if check number exists in db
-			String sqlQuery="select customerNumber from payments where checkNumber='"+cheque_number+"';";
-			String customerNumber;
-			ResultSet resultSet=statement.executeQuery(sqlQuery);
-			if(!resultSet.next())
+			statement.executeQuery("USE classicmodels");
+			ResultSet resultSet=statement.executeQuery("SELECT customerNumber FROM orders WHERE orderNumber="+orders.get(0)+";");
+			resultSet.next();
+			String customerNumber = resultSet.getString("customerNumber");
+			//check if cheque number exists
+			resultSet=statement.executeQuery("SELECT count(*) AS chequeCount FROM payments WHERE checkNumber='"+cheque_number+"' AND customerNumber="+customerNumber+";");
+			resultSet.next();
+			Integer chequeCount=0;
+			chequeCount = resultSet.getInt("chequeCount");
+			if(chequeCount>0)
 			{
-				//cheque number does not exists in db
-				sqlQuery="select customerNumber from orders where orderNumber='"+orders.get(0)+"';";
-				System.out.println(sqlQuery);
-				
+				for(Integer order:orders)
+				{
+					statement.executeUpdate("UPDATE orders SET checkNumber='"+cheque_number+"' WHERE orderNumber="+order+";");						
+				}
 			}
 			else
 			{
-				//cheque number exists in db
-				
+				statement.execute("INSERT INTO payments(customerNumber,checkNumber,paymentDate,amount) VALUES("+customerNumber+",'"+cheque_number+"',CURDATE(),"+amount+")");
+				for(Integer order:orders)
+				{
+					statement.executeUpdate("UPDATE orders SET checkNumber='"+cheque_number+"' WHERE orderNumber="+order+";");						
+				}				
 			}
-
-			//update the tables
-			for (Integer i:orders)
-			{
-				sqlQuery="update orders set checkNumber='"+cheque_number+"' where orderNumber="+i+";";
-				statement.executeUpdate(sqlQuery);
-			}
-
-		} catch (SQLException e) 
+			return true;
+		}
+		catch(Exception e)
 		{
-			// SQL Exception
-			System.out.println("SQL Exception");
 			e.printStackTrace();
+			return false;
 		}
-
-
-		//close the connection
-		try {
-			statement.close();
-			//database.close();
-		} catch (SQLException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		}
-		return true;
 	}
 
+	//Return a list of all the orders for which we have no record of a payment in the
+	//database. Exclude cancelled and disputed orders.
 	ArrayList<Integer> unpaidOrders( Connection database ) throws SQLException
 	{
-
 		try {
 			this.database=database;			
 			statement = database.createStatement();
+			statement.executeQuery("USE classicmodels");
 			ArrayList <Integer> orders=new ArrayList<Integer>();
-			String getOrders="select orderNumber from orders where checkNumber is null and (status != 'cancelled' OR status != 'disputed');";
-			ResultSet resultSet = statement.executeQuery(getOrders);
-
-			while (resultSet.next()) {
-				//store in hashmap key value pair
+			ResultSet resultSet = statement.executeQuery("SELECT orderNumber FROM orders WHERE checkNumber IS null AND (status != 'cancelled' OR status != 'disputed');");
+			while (resultSet.next()) 
+			{
+				//store in arraylist
 				orders.add(resultSet.getInt("orderNumber"));
 			}
-
-			return orders;
-		} catch (SQLException e) 
+			statement.close();
+			return orders;			
+		} catch (Exception e) 
 		{
-			// SQL Exception
-			System.out.println("SQL Exception");
 			e.printStackTrace();
+			return null;
 		}
-		statement.close();
-		return null;
-
 	}
 
+	//Return a list of all the cheque numbers that we haven’t managed to pair up with
+	//orders in the database.
 	ArrayList<String> unknownPayments( Connection database )
 	{
 		try {
 			this.database=database;			
 			statement = database.createStatement();
+			statement.executeQuery("USE classicmodels");
 			ArrayList <String> payments=new ArrayList<String>();
-			String getOrders="select payments.checkNumber from orders right join payments on orders.checkNumber=payments.checkNumber where orderNumber is null;";
-			ResultSet resultSet = statement.executeQuery(getOrders);
-
-			while (resultSet.next()) {
+			ResultSet resultSet = statement.executeQuery("SELECT payments.checkNumber FROM orders RIGHT JOIN payments ON orders.checkNumber=payments.checkNumber WHERE orderNumber IS null;");
+			while (resultSet.next()) 
+			{
+				//store in arraylist
 				payments.add(resultSet.getString("checkNumber"));
 			}
-
+			statement.close();
 			return payments;
-		} catch (SQLException e) 
+		} catch (Exception e) 
 		{
 			// SQL Exception
-			System.out.println("SQL Exception");
 			e.printStackTrace();
+			return null;
 		}
-		try {
-			statement.close();
-		} catch (SQLException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		}
-		return null;
 	}
 }
