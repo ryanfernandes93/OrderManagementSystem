@@ -53,6 +53,7 @@ Assumptions:
   
 Input:
 -------
+
 Class PaymentManagement
 	-reconcilePayments(Connection database)
 		Accept database connection object as an input
@@ -62,6 +63,7 @@ Class PaymentManagement
 		Accept database connection object as an input
 	-unknownPayments(Connection database)
 		Accept database connection object as an input  
+
 Choices
 -------
 
